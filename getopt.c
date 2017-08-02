@@ -2,10 +2,7 @@
 
 #include <stddef.h>
 #include <string.h>
-
-const int no_argument = 0;
-const int required_argument = 1;
-const int optional_argument = 2;
+#include <stdio.h>
 
 char* optarg;
 int optopt;
@@ -14,11 +11,21 @@ int optind = 1;
 int opterr;
 
 static char* optcursor = NULL;
+static char *first = NULL;
+
+/* rotates argv array */
+static void rotate(char **argv, int argc) {
+  if (argc <= 1)
+    return;
+  char *tmp = argv[0];
+  memmove(argv, argv + 1, (argc - 1) * sizeof(char *));
+  argv[argc - 1] = tmp;
+}
 
 /* Implemented based on [1] and [2] for optional arguments.
    optopt is handled FreeBSD-style, per [3].
    Other GNU and FreeBSD extensions are purely accidental. 
-   
+
 [1] http://pubs.opengroup.org/onlinepubs/000095399/functions/getopt.html
 [2] http://www.kernel.org/doc/man-pages/online/pages/man3/getopt.3.html
 [3] http://www.freebsd.org/cgi/man.cgi?query=getopt&sektion=3&manpath=FreeBSD+9.0-RELEASE
@@ -41,9 +48,21 @@ int getopt(int argc, char* const argv[], const char* optstring) {
     goto no_more_optchars;
 
   /* If, when getopt() is called *argv[optind]  is not the character '-', 
-     getopt() shall return -1 without changing optind. */
-  if (*argv[optind] != '-')
-    goto no_more_optchars;
+     permute argv to move non options to the end */
+  if (*argv[optind] != '-') {
+    if (argc - optind <= 1)
+      goto no_more_optchars;
+
+    if (!first)
+      first = argv[optind];
+
+    do {
+      rotate((char **)(argv + optind), argc - optind);
+    } while (*argv[optind] != '-' && argv[optind] != first);
+
+    if (argv[optind] == first)
+      goto no_more_optchars;
+  }
 
   /* If, when getopt() is called argv[optind] points to the string "-", 
      getopt() shall return -1 without changing optind. */
@@ -54,6 +73,11 @@ int getopt(int argc, char* const argv[], const char* optstring) {
      getopt() shall return -1 after incrementing optind. */
   if (strcmp(argv[optind], "--") == 0) {
     ++optind;
+    if (first) {
+      do {
+        rotate((char **)(argv + optind), argc - optind);
+      } while (argv[optind] != first);
+    }
     goto no_more_optchars;
   }
 
@@ -100,16 +124,17 @@ int getopt(int argc, char* const argv[], const char* optstring) {
                was a colon, or a question-mark character ( '?' ) otherwise.
             */
             optarg = NULL;
+            fprintf(stderr, "%s: option requires an argument -- '%c'\n", argv[0], optchar);
             optchar = (optstring[0] == ':') ? ':' : '?';
           }
         } else {
           optarg = NULL;
         }
       }
-
       optcursor = NULL;
     }
   } else {
+    fprintf(stderr,"%s: invalid option -- '%c'\n", argv[0], optchar);
     /* If getopt() encounters an option character that is not contained in 
        optstring, it shall return the question-mark ( '?' ) character. */
     optchar = '?';
@@ -122,6 +147,7 @@ int getopt(int argc, char* const argv[], const char* optstring) {
 
 no_more_optchars:
   optcursor = NULL;
+  first = NULL;
   return -1;
 }
 
@@ -144,6 +170,28 @@ int getopt_long(int argc, char* const argv[], const char* optstring,
   if (optind >= argc)
     return -1;
 
+  /* If, when getopt() is called argv[optind] is a null pointer, getopt_long()
+  shall return -1 without changing optind. */
+  if (argv[optind] == NULL)
+    goto no_more_optchars;
+
+  /* If, when getopt_long() is called *argv[optind] is not the character '-',
+  permute argv to move non options to the end */
+  if (*argv[optind] != '-') {
+    if (argc - optind <= 1)
+      goto no_more_optchars;
+
+    if (!first)
+      first = argv[optind];
+
+    do {
+      rotate((char **)(argv + optind), argc - optind);
+    } while (*argv[optind] != '-' && argv[optind] != first);
+
+    if (argv[optind] == first)
+      goto no_more_optchars;
+  }
+
   if (strlen(argv[optind]) < 3 || strncmp(argv[optind], "--", 2) != 0)
     return getopt(argc, argv, optstring);
 
@@ -161,7 +209,7 @@ int getopt_long(int argc, char* const argv[], const char* optstring,
     /* If longindex is not NULL, it points to a variable which is set to the
        index of the long option relative to longopts. */
     if (longindex)
-      *longindex = (match - longopts);
+      *longindex = (int)(match - longopts);
 
     /* If flag is NULL, then getopt_long() shall return val. 
        Otherwise, getopt_long() returns 0, and flag shall point to a variable
@@ -197,8 +245,17 @@ int getopt_long(int argc, char* const argv[], const char* optstring,
   } else {
     /* Unknown option or ambiguous match. */
     retval = '?';
+    if (num_matches == 0) {
+      fprintf(stderr, "%s: unrecognized option -- '%s'\n", argv[0], argv[optind]);
+    } else {
+      fprintf(stderr, "%s: option '%s' is ambiguous\n", argv[0], argv[optind]);
+    }
   }
 
   ++optind;
   return retval;
+
+no_more_optchars:
+  first = NULL;
+  return -1;
 }
